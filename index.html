@@ -48,6 +48,25 @@
             height: 400px;
             margin-top: 20px;
         }
+
+        #directions {
+            width: 100%;
+            max-width: 400px;
+            height: auto;
+            padding: 10px;
+            font-size: 14px;
+            margin: 0 auto;
+            text-align: left;
+            border: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+
+        #street-view {
+            width: 100%;
+            height: 400px;
+            margin-top: 20px;
+            background-color: #eee;
+        }
     </style>
 </head>
 <body>
@@ -63,15 +82,22 @@
         </div>
     </div>
 
-    <!-- Map Display -->
+    <!-- Map, Directions Display, and Street View -->
     <div id="map"></div>
+    <div id="directions"></div>
+    <div id="street-view"></div> <!-- Street View container -->
 
     <script src="https://cdn.jsdelivr.net/npm/ol@v7.2.2/dist/ol.js"></script>
     <script>
-        const apiKey = 'pk.d8b5fcd6c41e5f8b1295d3648581f84e'; // Replace with your LocationIQ API key
+        const locationIQKey = 'pk.0ee4de3fa5ebe55d331950dfd483e8d1'; // Replace with your LocationIQ API key
+        const mapillaryClientId = 'MLY|8547715881931381|2dbf2ff9472b15dbb3c4b68e987f5555'; // Replace with your Mapillary client ID
         const maxRadius = 50000; // Max radius of 50 km
         let userLocation, hospitalLocation;
-        let map, userMarker, routeLayer, watchId;
+        let map, userMarker, hospitalMarker, routeLayer, watchId;
+
+        // Custom icon URLs
+        const userIcon = 'https://cdn-icons-png.flaticon.com/512/7477/7477317.png'; // Replace with your user location icon URL
+        const hospitalIcon = 'https://cdn-icons-png.flaticon.com/512/4314/4314281.png'; // Replace with your hospital icon URL
 
         function getLocation() {
             if (navigator.geolocation) {
@@ -91,7 +117,7 @@
         }
 
         function findNearestHospital(latitude, longitude, radius) {
-            const url = `https://us1.locationiq.com/v1/nearby.php?key=${apiKey}&lat=${latitude}&lon=${longitude}&tag=hospital&radius=${radius}&format=json`;
+            const url = `https://us1.locationiq.com/v1/nearby.php?key=${locationIQKey}&lat=${latitude}&lon=${longitude}&tag=hospital&radius=${radius}&format=json`;
 
             fetch(url)
                 .then(response => response.json())
@@ -144,29 +170,16 @@
                     target: 'map',
                     layers: [
                         new ol.layer.Tile({
-                            source: new ol.source.OSM()
+                            source: new ol.source.XYZ({
+                                url: `https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=JCLJol4eXUeBktnabzuY`
+                            })
                         })
                     ],
                     view: new ol.View({
                         center: ol.proj.fromLonLat(userLocation),
-                        zoom: 13
+                        zoom: 18 // Increased zoom level for better clarity
                     })
                 });
-
-                // Add user and hospital markers
-                userMarker = new ol.Feature({
-                    geometry: new ol.geom.Point(ol.proj.fromLonLat(userLocation))
-                });
-                const hospitalMarker = new ol.Feature({
-                    geometry: new ol.geom.Point(ol.proj.fromLonLat(hospitalLocation))
-                });
-                const vectorSource = new ol.source.Vector({
-                    features: [userMarker, hospitalMarker]
-                });
-                const vectorLayer = new ol.layer.Vector({
-                    source: vectorSource
-                });
-                map.addLayer(vectorLayer);
             }
 
             // Start live tracking
@@ -184,14 +197,36 @@
         // Update user location and route on the map
         function updateLocation(position) {
             userLocation = [position.coords.longitude, position.coords.latitude];
-            userMarker.getGeometry().setCoordinates(ol.proj.fromLonLat(userLocation));
+
+            if (!userMarker) {
+                userMarker = new ol.Feature({
+                    geometry: new ol.geom.Point(ol.proj.fromLonLat(userLocation))
+                });
+                const userMarkerStyle = new ol.style.Style({
+                    image: new ol.style.Icon({
+                        src: userIcon,
+                        scale: 0.1 // Adjust size of the user marker
+                    })
+                });
+                userMarker.setStyle(userMarkerStyle);
+                map.addLayer(new ol.layer.Vector({
+                    source: new ol.source.Vector({
+                        features: [userMarker]
+                    })
+                }));
+            } else {
+                userMarker.getGeometry().setCoordinates(ol.proj.fromLonLat(userLocation));
+            }
+
             map.getView().setCenter(ol.proj.fromLonLat(userLocation));
 
             // Update the route to the hospital
             if (routeLayer) {
                 map.removeLayer(routeLayer);
             }
-            fetch(`https://router.project-osrm.org/route/v1/driving/${userLocation.join(',')};${hospitalLocation.join(',')}?overview=full&geometries=geojson`)
+
+            // Fetch the route to the hospital
+            fetch(`https://router.project-osrm.org/route/v1/driving/${userLocation.join(',')};${hospitalLocation.join(',')}?overview=full&geometries=geojson&steps=true`)
                 .then(response => response.json())
                 .then(routeData => {
                     const route = new ol.format.GeoJSON().readFeature(routeData.routes[0].geometry, {
@@ -211,8 +246,57 @@
                         })
                     });
                     map.addLayer(routeLayer);
+
+                    // Update the hospital marker if it hasn't been added yet
+                    if (!hospitalMarker) {
+                        hospitalMarker = new ol.Feature({
+                            geometry: new ol.geom.Point(ol.proj.fromLonLat(hospitalLocation))
+                        });
+                        const hospitalMarkerStyle = new ol.style.Style({
+                            image: new ol.style.Icon({
+                                src: hospitalIcon,
+                                scale: 0.09 // Adjust size of the hospital marker
+                            })
+                        });
+                        hospitalMarker.setStyle(hospitalMarkerStyle);
+                        map.addLayer(new ol.layer.Vector({
+                            source: new ol.source.Vector({
+                                features: [hospitalMarker]
+                            })
+                        }));
+                    } else {
+                        hospitalMarker.getGeometry().setCoordinates(ol.proj.fromLonLat(hospitalLocation));
+                    }
+
+                    // Fetch street view image
+                    fetchStreetView();
                 })
                 .catch(error => console.error("Error fetching route:", error));
+        }
+
+        // Fetch street view image from Mapillary
+        function fetchStreetView() {
+            const latLng = `${userLocation[1]},${userLocation[0]}`;
+            const url = `https://a.mapillary.com/v3/images?client_id=${mapillaryClientId}&bbox=${userLocation[1]-0.001},${userLocation[0]-0.001},${userLocation[1]+0.001},${userLocation[0]+0.001}`;
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    const streetViewContainer = document.getElementById('street-view');
+                    streetViewContainer.innerHTML = ''; // Clear previous image
+                    if (data && data.features.length > 0) {
+                        const imageUrl = `https://images.mapillary.com/${data.features[0].properties.key}/640.jpg`;
+                        const img = document.createElement('img');
+                        img.src = imageUrl;
+                        img.alt = 'Street View Image';
+                        img.style.width = '100%';
+                        img.style.height = '100%';
+                        streetViewContainer.appendChild(img);
+                    } else {
+                        streetViewContainer.innerText = 'No street view available at this location.';
+                    }
+                })
+                .catch(error => console.error("Error fetching street view:", error));
         }
     </script>
 </body>
