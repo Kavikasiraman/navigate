@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Find Nearest Hospital</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.2.2/ol.css">
+    <style>
+        /* Style for modal popup */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.4);
+        }
+
+        .modal-content {
+            background-color: #fff;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 400px;
+            text-align: center;
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        #map {
+            width: 100%;
+            height: 400px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Find the Nearest Hospital</h1>
+    <button onclick="getLocation()">Find the nearest hospital to me</button>
+
+    <!-- Modal Popup -->
+    <div id="myModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <p id="hospitalInfo">Hospital information will appear here.</p>
+            <button id="navigateButton" onclick="displayMap()">Show Route on Map</button>
+        </div>
+    </div>
+
+    <!-- Map Display -->
+    <div id="map"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/ol@v7.2.2/dist/ol.js"></script>
+    <script>
+        const apiKey = 'pk.d8b5fcd6c41e5f8b1295d3648581f84e'; // Replace with your LocationIQ API key
+        const maxRadius = 50000; // Max radius of 50 km
+        let userLocation, hospitalLocation;
+        let map, userMarker, routeLayer, watchId;
+
+        function getLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(success, error);
+            } else {
+                alert("Geolocation is not supported by this browser.");
+            }
+        }
+
+        function success(position) {
+            userLocation = [position.coords.longitude, position.coords.latitude];
+            findNearestHospital(userLocation[1], userLocation[0], 5000); // Start with 5 km radius
+        }
+
+        function error() {
+            alert("Unable to retrieve your location.");
+        }
+
+        function findNearestHospital(latitude, longitude, radius) {
+            const url = `https://us1.locationiq.com/v1/nearby.php?key=${apiKey}&lat=${latitude}&lon=${longitude}&tag=hospital&radius=${radius}&format=json`;
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.length > 0) {
+                        const nearestHospital = data[0];
+                        hospitalLocation = [parseFloat(nearestHospital.lon), parseFloat(nearestHospital.lat)];
+                        const address = nearestHospital.address;
+                        const addressText = `${address.road || ''}, ${address.city || ''}, ${address.state || ''}, ${address.country || ''}`;
+
+                        document.getElementById("hospitalInfo").innerText = `The nearest hospital is ${nearestHospital.name}, located at ${addressText}`;
+                        openModal();
+                    } else if (radius < maxRadius) {
+                        findNearestHospital(latitude, longitude, radius + 5000); // Increase radius by 5 km
+                    } else {
+                        alert("No hospitals found within 50 km.");
+                    }
+                })
+                .catch(error => {
+                    console.error("Error:", error);
+                    alert("An error occurred while fetching hospital data.");
+                });
+        }
+
+        // Open modal function
+        function openModal() {
+            document.getElementById("myModal").style.display = "block";
+        }
+
+        // Close modal function
+        function closeModal() {
+            document.getElementById("myModal").style.display = "none";
+        }
+
+        // Close modal if user clicks outside of it
+        window.onclick = function(event) {
+            const modal = document.getElementById("myModal");
+            if (event.target == modal) {
+                closeModal();
+            }
+        };
+
+        // Display map with navigation route
+        function displayMap() {
+            closeModal();
+
+            // Initialize map only if it hasn't been initialized yet
+            if (!map) {
+                map = new ol.Map({
+                    target: 'map',
+                    layers: [
+                        new ol.layer.Tile({
+                            source: new ol.source.OSM()
+                        })
+                    ],
+                    view: new ol.View({
+                        center: ol.proj.fromLonLat(userLocation),
+                        zoom: 13
+                    })
+                });
+
+                // Add user and hospital markers
+                userMarker = new ol.Feature({
+                    geometry: new ol.geom.Point(ol.proj.fromLonLat(userLocation))
+                });
+                const hospitalMarker = new ol.Feature({
+                    geometry: new ol.geom.Point(ol.proj.fromLonLat(hospitalLocation))
+                });
+                const vectorSource = new ol.source.Vector({
+                    features: [userMarker, hospitalMarker]
+                });
+                const vectorLayer = new ol.layer.Vector({
+                    source: vectorSource
+                });
+                map.addLayer(vectorLayer);
+            }
+
+            // Start live tracking
+            if (navigator.geolocation) {
+                watchId = navigator.geolocation.watchPosition(updateLocation, error, {
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 10000
+                });
+            } else {
+                alert("Geolocation is not supported by this browser.");
+            }
+        }
+
+        // Update user location and route on the map
+        function updateLocation(position) {
+            userLocation = [position.coords.longitude, position.coords.latitude];
+            userMarker.getGeometry().setCoordinates(ol.proj.fromLonLat(userLocation));
+            map.getView().setCenter(ol.proj.fromLonLat(userLocation));
+
+            // Update the route to the hospital
+            if (routeLayer) {
+                map.removeLayer(routeLayer);
+            }
+            fetch(`https://router.project-osrm.org/route/v1/driving/${userLocation.join(',')};${hospitalLocation.join(',')}?overview=full&geometries=geojson`)
+                .then(response => response.json())
+                .then(routeData => {
+                    const route = new ol.format.GeoJSON().readFeature(routeData.routes[0].geometry, {
+                        dataProjection: 'EPSG:4326',
+                        featureProjection: 'EPSG:3857'
+                    });
+
+                    routeLayer = new ol.layer.Vector({
+                        source: new ol.source.Vector({
+                            features: [route]
+                        }),
+                        style: new ol.style.Style({
+                            stroke: new ol.style.Stroke({
+                                color: '#FF0000',
+                                width: 3
+                            })
+                        })
+                    });
+                    map.addLayer(routeLayer);
+                })
+                .catch(error => console.error("Error fetching route:", error));
+        }
+    </script>
+</body>
+</html>
